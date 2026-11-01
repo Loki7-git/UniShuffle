@@ -4,6 +4,7 @@ import {supabase} from './supabase'
 import './style.css'
 
 function App(){
+  if(!supabase) return <main className="shell"><section className="card auth"><div className="brand">U<span>S</span></div><h1>UniShuffle</h1><p className="tag">Supabase configuration is missing.</p><div className="msg">VITE_SUPABASE_URL or VITE_SUPABASE_PUBLISHABLE_KEY is not available in this deployment.</div></section></main>
   const [session,setSession]=useState(null), [email,setEmail]=useState(''), [otp,setOtp]=useState('')
   const [step,setStep]=useState('email'), [loading,setLoading]=useState(false), [msg,setMsg]=useState('')
   const [profile,setProfile]=useState(null), [form,setForm]=useState({nickname:'',college:'',year:'',department:'',interests:'',bio:''})
