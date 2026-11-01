@@ -20,156 +20,461 @@ function App() {
   const streamRef = useRef(null)
   const peerRef = useRef(null)
   const channelRef = useRef(null)
+  const pollTimerRef = useRef(null)
+  const pendingCandidatesRef = useRef([])
 
   useEffect(() => {
-    if (!supabase) { setStatus('Supabase is not configured on this deployment.'); setScreen('error'); return }
+    if (!supabase) {
+      setStatus('Supabase configuration is missing. Add the VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY variables in Vercel.')
+      setScreen('error')
+      return
+    }
+
     bootstrap()
     return () => cleanupCall()
   }, [])
 
   async function bootstrap() {
-    let { data: { session: current } } = await supabase.auth.getSession()
-    if (!current) {
-      const { data, error } = await supabase.auth.signInAnonymously()
-      if (error) { setStatus(error.message); setScreen('error'); return }
-      current = data.session
+    try {
+      let { data: { session: current } } = await supabase.auth.getSession()
+
+      if (!current) {
+        const { data, error } = await supabase.auth.signInAnonymously()
+        if (error) {
+          setStatus(error.message)
+          setScreen('error')
+          return
+        }
+        current = data.session
+      }
+
+      if (!current?.user) {
+        setStatus('Could not create a temporary student session. Please refresh and try again.')
+        setScreen('error')
+        return
+      }
+
+      setSession(current)
+      await loadProfile(current.user.id)
+    } catch (error) {
+      setStatus(error?.message || 'Unable to connect to UniShuffle.')
+      setScreen('error')
     }
-    setSession(current)
-    await loadProfile(current.user.id)
   }
 
   async function loadProfile(id) {
-    const { data, error } = await supabase.from('profiles').select('*').eq('id', id).maybeSingle()
-    if (error) { setStatus(error.message); setScreen('error'); return }
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle()
+
+    if (error) {
+      setStatus(error.message)
+      setScreen('error')
+      return
+    }
+
     if (data?.nickname) {
-      setProfile(data); setUsername(data.nickname); setGender(data.gender || ''); setScreen('lobby')
-    } else setScreen('profile')
+      setProfile(data)
+      setUsername(data.nickname)
+      setGender(data.gender || '')
+      setScreen('lobby')
+    } else {
+      setScreen('profile')
+    }
   }
 
   async function saveProfile(e) {
     e.preventDefault()
-    if (username.trim().length < 2 || !gender) return
-    setLoading(true); setStatus('')
-    const { data, error } = await supabase.from('profiles').upsert({ id: session.user.id, nickname: username.trim(), gender }).select().single()
+
+    const name = username.trim()
+    if (name.length < 2 || !gender || !session?.user?.id) return
+
+    setLoading(true)
+    setStatus('')
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .upsert({
+        id: session.user.id,
+        nickname: name,
+        gender
+      })
+      .select()
+      .single()
+
     setLoading(false)
-    if (error) { setStatus(error.message); return }
-    setProfile(data); setScreen('lobby')
+
+    if (error) {
+      setStatus(error.message)
+      return
+    }
+
+    setProfile(data)
+    setScreen('lobby')
   }
 
   async function findPartner() {
-    setLoading(true); setStatus('Finding another student…')
+    if (!session?.user) return
+
+    setLoading(true)
+    setStatus('Finding another student…')
+
     const { data, error } = await supabase.rpc('find_match')
-    if (error) { setLoading(false); setStatus(error.message); return }
+
+    if (error) {
+      setLoading(false)
+      setStatus(error.message)
+      return
+    }
+
     if (!data) {
       setStatus('You are in the queue. Waiting for another student…')
       setLoading(false)
-      setTimeout(findPartner, 2500)
+
+      clearTimeout(pollTimerRef.current)
+      pollTimerRef.current = setTimeout(findPartner, 2500)
       return
     }
-    setMatchId(data); setLoading(false); await openCall(data)
+
+    clearTimeout(pollTimerRef.current)
+    setMatchId(data)
+    setLoading(false)
+    await openCall(data)
   }
 
   async function openCall(id) {
-    setScreen('call'); setStatus('Connecting…')
-    const { data: match, error } = await supabase.from('matches').select('id,user_a,user_b').eq('id', id).single()
-    if (error) { setStatus(error.message); return }
+    setScreen('call')
+    setStatus('Starting camera and microphone…')
+    pendingCandidatesRef.current = []
+
+    const { data: match, error } = await supabase
+      .from('matches')
+      .select('id,user_a,user_b')
+      .eq('id', id)
+      .single()
+
+    if (error) {
+      setStatus(error.message)
+      return
+    }
+
     const otherId = match.user_a === session.user.id ? match.user_b : match.user_a
-    const { data: p } = await supabase.from('profiles').select('nickname,gender').eq('id', otherId).single()
+
+    const { data: p } = await supabase
+      .from('profiles')
+      .select('nickname,gender')
+      .eq('id', otherId)
+      .single()
+
     setPartner(p || { nickname: 'Student', gender: '' })
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-      streamRef.current = stream
-      if (localVideo.current) localVideo.current.srcObject = stream
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] })
-      peerRef.current = pc
-      stream.getTracks().forEach(track => pc.addTrack(track, stream))
-      pc.ontrack = e => { if (remoteVideo.current) remoteVideo.current.srcObject = e.streams[0] }
-      pc.onicecandidate = e => {
-        if (e.candidate && channelRef.current) channelRef.current.send({ type: 'broadcast', event: 'signal', payload: { type: 'candidate', candidate: e.candidate } })
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Your browser does not support camera and microphone access.')
       }
 
-      const channel = supabase.channel('call:' + id)
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true
+      })
+
+      streamRef.current = stream
+
+      if (localVideo.current) {
+        localVideo.current.srcObject = stream
+        await localVideo.current.play().catch(() => {})
+      }
+
+      const pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      })
+
+      peerRef.current = pc
+
+      stream.getTracks().forEach(track => pc.addTrack(track, stream))
+
+      pc.ontrack = event => {
+        const remoteStream = event.streams?.[0]
+        if (remoteStream && remoteVideo.current) {
+          remoteVideo.current.srcObject = remoteStream
+          remoteVideo.current.play().catch(() => {})
+        }
+      }
+
+      const channel = supabase.channel('call:' + id, {
+        config: { broadcast: { self: false } }
+      })
+
       channelRef.current = channel
+
+      pc.onicecandidate = async event => {
+        if (!event.candidate) return
+
+        await channel.send({
+          type: 'broadcast',
+          event: 'signal',
+          payload: {
+            type: 'candidate',
+            candidate: event.candidate
+          }
+        })
+      }
+
       channel.on('broadcast', { event: 'signal' }, async ({ payload }) => {
         try {
+          if (payload.type === 'ready') {
+            if (isOfferer(match)) {
+              const offer = await pc.createOffer()
+              await pc.setLocalDescription(offer)
+
+              await channel.send({
+                type: 'broadcast',
+                event: 'signal',
+                payload: {
+                  type: 'offer',
+                  sdp: pc.localDescription
+                }
+              })
+            }
+            return
+          }
+
           if (payload.type === 'offer' && !isOfferer(match)) {
             await pc.setRemoteDescription(payload.sdp)
+
             const answer = await pc.createAnswer()
             await pc.setLocalDescription(answer)
-            await channel.send({ type: 'broadcast', event: 'signal', payload: { type: 'answer', sdp: answer } })
-          } else if (payload.type === 'answer' && isOfferer(match)) {
-            await pc.setRemoteDescription(payload.sdp)
-          } else if (payload.type === 'candidate' && payload.candidate) {
-            await pc.addIceCandidate(payload.candidate)
+
+            await channel.send({
+              type: 'broadcast',
+              event: 'signal',
+              payload: {
+                type: 'answer',
+                sdp: pc.localDescription
+              }
+            })
+
+            await flushCandidates(pc)
+            return
           }
-        } catch (err) { console.error(err) }
-      }).subscribe(async s => {
-        if (s !== 'SUBSCRIBED') return
-        setStatus('Connected — say hello 👋')
-        if (isOfferer(match)) {
-          const offer = await pc.createOffer()
-          await pc.setLocalDescription(offer)
-          await channel.send({ type: 'broadcast', event: 'signal', payload: { type: 'offer', sdp: offer } })
+
+          if (payload.type === 'answer' && isOfferer(match)) {
+            await pc.setRemoteDescription(payload.sdp)
+            await flushCandidates(pc)
+            return
+          }
+
+          if (payload.type === 'candidate' && payload.candidate) {
+            if (pc.remoteDescription) {
+              await pc.addIceCandidate(payload.candidate)
+            } else {
+              pendingCandidatesRef.current.push(payload.candidate)
+            }
+          }
+        } catch (err) {
+          console.error('WebRTC signal error:', err)
         }
       })
-    } catch (err) {
-      setStatus('Camera/microphone permission is required for the call.')
+
+      channel.subscribe(async state => {
+        if (state !== 'SUBSCRIBED') return
+
+        setStatus('Connected — say hello 👋')
+
+        await channel.send({
+          type: 'broadcast',
+          event: 'signal',
+          payload: { type: 'ready' }
+        })
+      })
+    } catch (error) {
+      console.error(error)
+      setStatus(error?.message || 'Camera/microphone permission is required for the call.')
     }
   }
 
-  function isOfferer(match) { return match.user_a === session.user.id }
+  async function flushCandidates(pc) {
+    const candidates = pendingCandidatesRef.current.splice(0)
+
+    for (const candidate of candidates) {
+      try {
+        await pc.addIceCandidate(candidate)
+      } catch (error) {
+        console.error('ICE candidate error:', error)
+      }
+    }
+  }
+
+  function isOfferer(match) {
+    return match.user_a === session.user.id
+  }
 
   async function endCall() {
-    if (matchId) await supabase.rpc('end_match', { p_match: matchId })
-    cleanupCall(); setMatchId(null); setPartner(null); setScreen('lobby'); setStatus('')
+    clearTimeout(pollTimerRef.current)
+
+    if (matchId) {
+      await supabase.rpc('end_match', { p_match: matchId })
+    }
+
+    cleanupCall()
+    setMatchId(null)
+    setPartner(null)
+    setScreen('lobby')
+    setStatus('')
   }
 
   function cleanupCall() {
-    streamRef.current?.getTracks().forEach(t => t.stop())
+    clearTimeout(pollTimerRef.current)
+    streamRef.current?.getTracks().forEach(track => track.stop())
     peerRef.current?.close()
-    if (channelRef.current) supabase?.removeChannel(channelRef.current)
-    streamRef.current = null; peerRef.current = null; channelRef.current = null
+
+    if (channelRef.current && supabase) {
+      supabase.removeChannel(channelRef.current)
+    }
+
+    streamRef.current = null
+    peerRef.current = null
+    channelRef.current = null
+    pendingCandidatesRef.current = []
   }
 
   function toggleMic() {
-    const t = streamRef.current?.getAudioTracks()[0]
-    if (t) { t.enabled = !t.enabled; setMicOn(t.enabled) }
+    const track = streamRef.current?.getAudioTracks()[0]
+    if (!track) return
+
+    track.enabled = !track.enabled
+    setMicOn(track.enabled)
   }
 
   function toggleCamera() {
-    const t = streamRef.current?.getVideoTracks()[0]
-    if (t) { t.enabled = !t.enabled; setCameraOn(t.enabled) }
+    const track = streamRef.current?.getVideoTracks()[0]
+    if (!track) return
+
+    track.enabled = !track.enabled
+    setCameraOn(track.enabled)
   }
 
-  if (screen === 'loading') return <main className="shell"><section className="card auth"><div className="brand">US</div><h1>UniShuffle</h1><p>Joining securely…</p></section></main>
-  if (screen === 'error') return <main className="shell"><section className="card auth"><div className="brand">US</div><h1>UniShuffle</h1><div className="msg">{status}</div><p>Enable Anonymous Sign-Ins in Supabase → Authentication → Providers, then refresh.</p></section></main>
+  if (screen === 'loading') {
+    return (
+      <main className="shell">
+        <section className="card auth">
+          <div className="brand">US</div>
+          <h1>UniShuffle</h1>
+          <p>Joining securely…</p>
+        </section>
+      </main>
+    )
+  }
 
-  if (screen === 'profile') return <main className="shell"><section className="card auth">
-    <div className="brand">US</div><h1>UniShuffle</h1><p className="tag">Meet someone new from your college.</p>
-    <p className="sub">No email. No OTP. Just choose a username and gender.</p>
-    <form onSubmit={saveProfile}>
-      <label>Username</label><input required minLength="2" maxLength="24" placeholder="e.g. Lokesh" value={username} onChange={e=>setUsername(e.target.value)}/>
-      <label>Gender</label><select required value={gender} onChange={e=>setGender(e.target.value)}><option value="">Choose gender</option><option>Male</option><option>Female</option><option>Other</option></select>
-      <button disabled={loading}>{loading ? 'Joining…' : 'Join UniShuffle'}</button>
-    </form>
-    <small>Your email and phone number are never requested.</small>
-  </section></main>
+  if (screen === 'error') {
+    return (
+      <main className="shell">
+        <section className="card auth">
+          <div className="brand">US</div>
+          <h1>UniShuffle</h1>
+          <div className="msg">{status}</div>
+          <button onClick={() => window.location.reload()}>Try Again</button>
+        </section>
+      </main>
+    )
+  }
 
-  if (screen === 'lobby') return <main className="shell"><section className="card lobby">
-    <div className="brand">US</div><h1>Welcome, {profile?.nickname} 👋</h1>
-    <p className="tag">Ready to meet another student?</p>
-    <div className="profile-pill"><span>{profile?.nickname}</span><b>{profile?.gender}</b></div>
-    <button onClick={findPartner} disabled={loading}>{loading ? 'Finding someone…' : '🎥 Join Random Call'}</button>
-    {status && <div className="msg">{status}</div>}
-    <div className="features"><span>🎥 Video</span><span>🎙️ Voice</span><span>⏭️ Skip</span><span>🛡️ Report</span></div>
-  </section></main>
+  if (screen === 'profile') {
+    return (
+      <main className="shell">
+        <section className="card auth">
+          <div className="brand">US</div>
+          <h1>UniShuffle</h1>
+          <p className="tag">Meet someone new from your college.</p>
+          <p className="sub">No email. No OTP. Just choose a username and gender.</p>
 
-  return <main className="call-page"><header><b>UniShuffle</b><span>{partner ? 'Talking to ' + partner.nickname : 'Connecting…'}</span></header>
-    <div className="videos"><video ref={remoteVideo} autoPlay playsInline className="remote"/><video ref={localVideo} autoPlay muted playsInline className="local"/></div>
-    <div className="call-status">{status}</div>
-    <div className="controls"><button onClick={toggleMic}>{micOn ? '🎙️' : '🔇'}</button><button onClick={toggleCamera}>{cameraOn ? '📷' : '🚫'}</button><button className="end" onClick={endCall}>End Call</button></div>
-  </main>
+          <form onSubmit={saveProfile}>
+            <label>Username</label>
+            <input
+              required
+              minLength="2"
+              maxLength="24"
+              placeholder="e.g. Lokesh"
+              value={username}
+              onChange={e => setUsername(e.target.value)}
+            />
+
+            <label>Gender</label>
+            <select
+              required
+              value={gender}
+              onChange={e => setGender(e.target.value)}
+            >
+              <option value="">Choose gender</option>
+              <option>Male</option>
+              <option>Female</option>
+              <option>Other</option>
+            </select>
+
+            <button disabled={loading}>
+              {loading ? 'Joining…' : 'Join UniShuffle'}
+            </button>
+          </form>
+
+          <small>Your email and phone number are never requested.</small>
+        </section>
+      </main>
+    )
+  }
+
+  if (screen === 'lobby') {
+    return (
+      <main className="shell">
+        <section className="card lobby">
+          <div className="brand">US</div>
+          <h1>Welcome, {profile?.nickname} 👋</h1>
+          <p className="tag">Ready to meet another student?</p>
+
+          <div className="profile-pill">
+            <span>{profile?.nickname}</span>
+            <b>{profile?.gender}</b>
+          </div>
+
+          <button onClick={findPartner} disabled={loading}>
+            {loading ? 'Finding someone…' : '🎥 Join Random Call'}
+          </button>
+
+          {status && <div className="msg">{status}</div>}
+
+          <div className="features">
+            <span>🎥 Video</span>
+            <span>🎙️ Voice</span>
+            <span>⏭️ Skip</span>
+            <span>🛡️ Report</span>
+          </div>
+        </section>
+      </main>
+    )
+  }
+
+  return (
+    <main className="call-page">
+      <header>
+        <b>UniShuffle</b>
+        <span>{partner ? 'Talking to ' + partner.nickname : 'Connecting…'}</span>
+      </header>
+
+      <div className="videos">
+        <video ref={remoteVideo} autoPlay playsInline className="remote" />
+        <video ref={localVideo} autoPlay muted playsInline className="local" />
+      </div>
+
+      <div className="call-status">{status}</div>
+
+      <div className="controls">
+        <button onClick={toggleMic}>{micOn ? '🎙️' : '🔇'}</button>
+        <button onClick={toggleCamera}>{cameraOn ? '📷' : '🚫'}</button>
+        <button className="end" onClick={endCall}>End Call</button>
+      </div>
+    </main>
+  )
 }
 
 createRoot(document.getElementById('root')).render(<App />)
