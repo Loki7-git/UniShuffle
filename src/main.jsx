@@ -1,44 +1,175 @@
-import React, {useEffect, useState} from 'react'
-import {createRoot} from 'react-dom/client'
-import {supabase} from './supabase'
+import React, { useEffect, useRef, useState } from 'react'
+import { createRoot } from 'react-dom/client'
+import { supabase } from './supabase'
 import './style.css'
 
-function App(){
-  if(!supabase) return <main className="shell"><section className="card auth"><div className="brand">U<span>S</span></div><h1>UniShuffle</h1><p className="tag">Supabase configuration is missing.</p><div className="msg">VITE_SUPABASE_URL or VITE_SUPABASE_PUBLISHABLE_KEY is not available in this deployment.</div></section></main>
-  const [session,setSession]=useState(null), [email,setEmail]=useState(''), [otp,setOtp]=useState('')
-  const [step,setStep]=useState('email'), [loading,setLoading]=useState(false), [msg,setMsg]=useState('')
-  const [profile,setProfile]=useState(null), [form,setForm]=useState({nickname:'',college:'',year:'',department:'',interests:'',bio:''})
+function App() {
+  const [session, setSession] = useState(null)
+  const [profile, setProfile] = useState(null)
+  const [username, setUsername] = useState('')
+  const [gender, setGender] = useState('')
+  const [screen, setScreen] = useState('loading')
+  const [status, setStatus] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [matchId, setMatchId] = useState(null)
+  const [partner, setPartner] = useState(null)
+  const [micOn, setMicOn] = useState(true)
+  const [cameraOn, setCameraOn] = useState(true)
+  const localVideo = useRef(null)
+  const remoteVideo = useRef(null)
+  const streamRef = useRef(null)
+  const peerRef = useRef(null)
+  const channelRef = useRef(null)
 
-  useEffect(()=>{supabase.auth.getSession().then(({data})=>setSession(data.session)); const {data}=supabase.auth.onAuthStateChange((_e,s)=>setSession(s)); return()=>data.subscription.unsubscribe()},[])
-  useEffect(()=>{if(session) loadProfile()},[session])
+  useEffect(() => {
+    if (!supabase) { setStatus('Supabase is not configured on this deployment.'); setScreen('error'); return }
+    bootstrap()
+    return () => cleanupCall()
+  }, [])
 
-  async function loadProfile(){
-    const {data}=await supabase.from('profiles').select('*').eq('id',session.user.id).maybeSingle()
-    setProfile(data)
-    if(data) setForm({nickname:data.nickname||'',college:data.college||'',year:data.year||'',department:data.department||'',interests:(data.interests||[]).join(', '),bio:data.bio||''})
+  async function bootstrap() {
+    let { data: { session: current } } = await supabase.auth.getSession()
+    if (!current) {
+      const { data, error } = await supabase.auth.signInAnonymously()
+      if (error) { setStatus(error.message); setScreen('error'); return }
+      current = data.session
+    }
+    setSession(current)
+    await loadProfile(current.user.id)
   }
-  async function sendOtp(e){e.preventDefault();setLoading(true);setMsg('')
-    const {error}=await supabase.auth.signInWithOtp({email:email.trim()})
-    setLoading(false); if(error)setMsg(error.message); else {setStep('otp');setMsg('OTP sent. Check your email.')}
+
+  async function loadProfile(id) {
+    const { data, error } = await supabase.from('profiles').select('*').eq('id', id).maybeSingle()
+    if (error) { setStatus(error.message); setScreen('error'); return }
+    if (data?.nickname) {
+      setProfile(data); setUsername(data.nickname); setGender(data.gender || ''); setScreen('lobby')
+    } else setScreen('profile')
   }
-  async function verify(e){e.preventDefault();setLoading(true);setMsg('')
-    const {error}=await supabase.auth.verifyOtp({email:email.trim(),token:otp.trim(),type:'email'})
-    setLoading(false); if(error)setMsg(error.message); else setMsg('Verified!')
+
+  async function saveProfile(e) {
+    e.preventDefault()
+    if (username.trim().length < 2 || !gender) return
+    setLoading(true); setStatus('')
+    const { data, error } = await supabase.from('profiles').upsert({ id: session.user.id, nickname: username.trim(), gender }).select().single()
+    setLoading(false)
+    if (error) { setStatus(error.message); return }
+    setProfile(data); setScreen('lobby')
   }
-  async function saveProfile(e){e.preventDefault();setLoading(true);setMsg('')
-    const interests=form.interests.split(',').map(x=>x.trim()).filter(Boolean)
-    const payload={id:session.user.id,nickname:form.nickname.trim(),college:form.college.trim()||null,year:form.year.trim()||null,department:form.department.trim()||null,interests,bio:form.bio.trim()||null}
-    const {error}=await supabase.from('profiles').upsert(payload)
-    setLoading(false); if(error)setMsg(error.message); else {setMsg('Profile saved!');loadProfile()}
+
+  async function findPartner() {
+    setLoading(true); setStatus('Finding another student…')
+    const { data, error } = await supabase.rpc('find_match')
+    if (error) { setLoading(false); setStatus(error.message); return }
+    if (!data) {
+      setStatus('You are in the queue. Waiting for another student…')
+      setLoading(false)
+      setTimeout(findPartner, 2500)
+      return
+    }
+    setMatchId(data); setLoading(false); await openCall(data)
   }
-  async function signout(){await supabase.auth.signOut();setProfile(null);setStep('email')}
-  if(!session) return <main className="shell"><section className="card auth"><div className="brand">U<span>S</span></div><h1>UniShuffle</h1><p className="tag">Meet someone new from your college.</p>
-    {step==='email'?<form onSubmit={sendOtp}><label>Email address</label><input type="email" required placeholder="you@example.com" value={email} onChange={e=>setEmail(e.target.value)}/><button disabled={loading}>{loading?'Sending…':'Send OTP'}</button></form>
-    :<form onSubmit={verify}><label>6-digit OTP</label><input inputMode="numeric" maxLength="6" required placeholder="123456" value={otp} onChange={e=>setOtp(e.target.value.replace(/\D/g,''))}/><button disabled={loading}>{loading?'Verifying…':'Verify OTP'}</button><button type="button" className="ghost" onClick={()=>setStep('email')}>Change email</button></form>}
-    {msg&&<div className="msg">{msg}</div>}<small>Your email is used only for authentication.</small></section></main>
-  return <main className="shell"><nav><div className="navbrand">UniShuffle</div><button className="ghost small" onClick={signout}>Log out</button></nav>
-    <section className="card profile"><div className="hero"><div className="avatar">{(form.nickname||'U')[0].toUpperCase()}</div><div><h2>{profile?'Welcome back':'Create your profile'}</h2><p>Tell people a little about you.</p></div></div>
-    <form onSubmit={saveProfile}><div className="grid"><div><label>Nickname *</label><input required minLength="2" maxLength="24" value={form.nickname} onChange={e=>setForm({...form,nickname:e.target.value})}/></div><div><label>College</label><input value={form.college} onChange={e=>setForm({...form,college:e.target.value})}/></div><div><label>Year</label><input placeholder="1st Year" value={form.year} onChange={e=>setForm({...form,year:e.target.value})}/></div><div><label>Department</label><input placeholder="CSE" value={form.department} onChange={e=>setForm({...form,department:e.target.value})}/></div></div><label>Interests <span>(comma separated)</span></label><input placeholder="Music, coding, movies" value={form.interests} onChange={e=>setForm({...form,interests:e.target.value})}/><label>Bio</label><textarea maxLength="160" placeholder="Something about you…" value={form.bio} onChange={e=>setForm({...form,bio:e.target.value})}/><button disabled={loading}>{loading?'Saving…':'Save Profile'}</button></form>
-    {msg&&<div className="msg">{msg}</div>}<div className="coming"><b>Next:</b> matching, live chat, skip, block & report are ready to connect to the existing UniShuffle database.</div></section></main>
+
+  async function openCall(id) {
+    setScreen('call'); setStatus('Connecting…')
+    const { data: match, error } = await supabase.from('matches').select('id,user_a,user_b').eq('id', id).single()
+    if (error) { setStatus(error.message); return }
+    const otherId = match.user_a === session.user.id ? match.user_b : match.user_a
+    const { data: p } = await supabase.from('profiles').select('nickname,gender').eq('id', otherId).single()
+    setPartner(p || { nickname: 'Student', gender: '' })
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+      streamRef.current = stream
+      if (localVideo.current) localVideo.current.srcObject = stream
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] })
+      peerRef.current = pc
+      stream.getTracks().forEach(track => pc.addTrack(track, stream))
+      pc.ontrack = e => { if (remoteVideo.current) remoteVideo.current.srcObject = e.streams[0] }
+      pc.onicecandidate = e => {
+        if (e.candidate && channelRef.current) channelRef.current.send({ type: 'broadcast', event: 'signal', payload: { type: 'candidate', candidate: e.candidate } })
+      }
+
+      const channel = supabase.channel('call:' + id)
+      channelRef.current = channel
+      channel.on('broadcast', { event: 'signal' }, async ({ payload }) => {
+        try {
+          if (payload.type === 'offer' && !isOfferer(match)) {
+            await pc.setRemoteDescription(payload.sdp)
+            const answer = await pc.createAnswer()
+            await pc.setLocalDescription(answer)
+            await channel.send({ type: 'broadcast', event: 'signal', payload: { type: 'answer', sdp: answer } })
+          } else if (payload.type === 'answer' && isOfferer(match)) {
+            await pc.setRemoteDescription(payload.sdp)
+          } else if (payload.type === 'candidate' && payload.candidate) {
+            await pc.addIceCandidate(payload.candidate)
+          }
+        } catch (err) { console.error(err) }
+      }).subscribe(async s => {
+        if (s !== 'SUBSCRIBED') return
+        setStatus('Connected — say hello 👋')
+        if (isOfferer(match)) {
+          const offer = await pc.createOffer()
+          await pc.setLocalDescription(offer)
+          await channel.send({ type: 'broadcast', event: 'signal', payload: { type: 'offer', sdp: offer } })
+        }
+      })
+    } catch (err) {
+      setStatus('Camera/microphone permission is required for the call.')
+    }
+  }
+
+  function isOfferer(match) { return match.user_a === session.user.id }
+
+  async function endCall() {
+    if (matchId) await supabase.rpc('end_match', { p_match: matchId })
+    cleanupCall(); setMatchId(null); setPartner(null); setScreen('lobby'); setStatus('')
+  }
+
+  function cleanupCall() {
+    streamRef.current?.getTracks().forEach(t => t.stop())
+    peerRef.current?.close()
+    if (channelRef.current) supabase?.removeChannel(channelRef.current)
+    streamRef.current = null; peerRef.current = null; channelRef.current = null
+  }
+
+  function toggleMic() {
+    const t = streamRef.current?.getAudioTracks()[0]
+    if (t) { t.enabled = !t.enabled; setMicOn(t.enabled) }
+  }
+
+  function toggleCamera() {
+    const t = streamRef.current?.getVideoTracks()[0]
+    if (t) { t.enabled = !t.enabled; setCameraOn(t.enabled) }
+  }
+
+  if (screen === 'loading') return <main className="shell"><section className="card auth"><div className="brand">US</div><h1>UniShuffle</h1><p>Joining securely…</p></section></main>
+  if (screen === 'error') return <main className="shell"><section className="card auth"><div className="brand">US</div><h1>UniShuffle</h1><div className="msg">{status}</div><p>Enable Anonymous Sign-Ins in Supabase → Authentication → Providers, then refresh.</p></section></main>
+
+  if (screen === 'profile') return <main className="shell"><section className="card auth">
+    <div className="brand">US</div><h1>UniShuffle</h1><p className="tag">Meet someone new from your college.</p>
+    <p className="sub">No email. No OTP. Just choose a username and gender.</p>
+    <form onSubmit={saveProfile}>
+      <label>Username</label><input required minLength="2" maxLength="24" placeholder="e.g. Lokesh" value={username} onChange={e=>setUsername(e.target.value)}/>
+      <label>Gender</label><select required value={gender} onChange={e=>setGender(e.target.value)}><option value="">Choose gender</option><option>Male</option><option>Female</option><option>Other</option></select>
+      <button disabled={loading}>{loading ? 'Joining…' : 'Join UniShuffle'}</button>
+    </form>
+    <small>Your email and phone number are never requested.</small>
+  </section></main>
+
+  if (screen === 'lobby') return <main className="shell"><section className="card lobby">
+    <div className="brand">US</div><h1>Welcome, {profile?.nickname} 👋</h1>
+    <p className="tag">Ready to meet another student?</p>
+    <div className="profile-pill"><span>{profile?.nickname}</span><b>{profile?.gender}</b></div>
+    <button onClick={findPartner} disabled={loading}>{loading ? 'Finding someone…' : '🎥 Join Random Call'}</button>
+    {status && <div className="msg">{status}</div>}
+    <div className="features"><span>🎥 Video</span><span>🎙️ Voice</span><span>⏭️ Skip</span><span>🛡️ Report</span></div>
+  </section></main>
+
+  return <main className="call-page"><header><b>UniShuffle</b><span>{partner ? 'Talking to ' + partner.nickname : 'Connecting…'}</span></header>
+    <div className="videos"><video ref={remoteVideo} autoPlay playsInline className="remote"/><video ref={localVideo} autoPlay muted playsInline className="local"/></div>
+    <div className="call-status">{status}</div>
+    <div className="controls"><button onClick={toggleMic}>{micOn ? '🎙️' : '🔇'}</button><button onClick={toggleCamera}>{cameraOn ? '📷' : '🚫'}</button><button className="end" onClick={endCall}>End Call</button></div>
+  </main>
 }
+
 createRoot(document.getElementById('root')).render(<App />)
