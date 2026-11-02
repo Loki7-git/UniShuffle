@@ -13,7 +13,7 @@
     "vite": "^7.1.7",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "@daily-co/daily-js": "^0.83.0"
+    "@daily-co/daily-js": "^0.94.0"
   },
   "devDependencies": {}
 }
