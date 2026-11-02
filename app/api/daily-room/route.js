@@ -27,7 +27,7 @@ export async function POST(request) {
     )
   }
 
-  const accessToken = request.headers.get('authorization')?.replace(/^Bearer\\s+/i, '')
+  const accessToken = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '')
   if (!accessToken) return Response.json({ error: 'Please sign in again.' }, { status: 401 })
 
   let body
