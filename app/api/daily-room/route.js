@@ -63,6 +63,12 @@ export async function POST(request) {
       return Response.json({ error: 'You are not allowed to join this match.' }, { status: 403 })
     }
 
+    const { data: ownProfile } = await supabase
+      .from('profiles')
+      .select('nickname')
+      .eq('id', user.id)
+      .maybeSingle()
+
     const roomName = `us-${matchId.replace(/-/g, '')}`
     const expiresAt = Math.floor(Date.now() / 1000) + 3600
 
@@ -96,7 +102,7 @@ export async function POST(request) {
         properties: {
           room_name: roomName,
           user_id: user.id,
-          user_name: user.user_metadata?.nickname || 'UniShuffle student',
+          user_name: ownProfile?.nickname || 'UniShuffle student',
           exp: expiresAt,
           eject_at_token_exp: true
         }
