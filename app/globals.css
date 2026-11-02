@@ -1,0 +1,25 @@
+*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,sans-serif;background:#09090f;color:#f5f5f7}button,input,textarea{font:inherit}.shell{min-height:100vh;background:radial-gradient(circle at 20% 0,#25184a 0,transparent 35%),radial-gradient(circle at 100% 20%,#12334a 0,transparent 35%),#09090f;padding:28px 18px}.card{width:min(680px,100%);margin:8vh auto 0;background:rgba(20,20,29,.88);border:1px solid #30303d;border-radius:28px;padding:34px;box-shadow:0 25px 80px #0008;backdrop-filter:blur(16px)}.auth{text-align:center;max-width:470px}.brand,.avatar{display:grid;place-items:center}.brand{width:64px;height:64px;margin:0 auto 18px;border-radius:20px;background:linear-gradient(135deg,#9b6cff,#46d7ff);font-size:25px;font-weight:900}.brand span{opacity:.65}h1{font-size:42px;margin:0}.tag{color:#a9a9b5;margin:8px 0 32px}label{display:block;text-align:left;color:#d7d7df;font-size:13px;font-weight:700;margin:18px 0 8px}input,textarea{width:100%;border:1px solid #383844;background:#111119;color:#fff;border-radius:13px;padding:13px 14px;outline:none}textarea{min-height:100px;resize:vertical}input:focus,textarea:focus{border-color:#8f72ff}button{width:100%;border:0;border-radius:13px;padding:14px;margin-top:18px;background:linear-gradient(135deg,#9b6cff,#5f8cff);color:#fff;font-weight:800;cursor:pointer}button:disabled{opacity:.6;cursor:not-allowed}.ghost{background:#20202a;color:#ddd}.small{width:auto;margin:0;padding:9px 14px}.msg{margin-top:16px;padding:11px 13px;border-radius:12px;background:#171722;color:#c8c8d5;font-size:14px}small{display:block;color:#777786;margin-top:20px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}nav{width:min(900px,100%);margin:auto;display:flex;justify-content:space-between;align-items:center}.navbrand{font-size:25px;font-weight:900}.profile{margin-top:30px}.hero{display:flex;align-items:center;gap:16px;margin-bottom:24px}.hero h2{margin:0;font-size:28px}.hero p{margin:5px 0;color:#9999a7}.avatar{width:58px;height:58px;border-radius:18px;background:linear-gradient(135deg,#9b6cff,#46d7ff);font-size:23px;font-weight:900}.coming{margin-top:22px;padding:15px;border:1px dashed #3a3a48;border-radius:14px;color:#aaaab7}@media(max-width:600px){.card{padding:24px;border-radius:22px}.grid{grid-template-columns:1fr}h1{font-size:36px}}
+select{width:100%;border:1px solid #383844;background:#111119;color:#fff;border-radius:13px;padding:13px 14px;outline:none}.sub{color:#a9a9b5}.lobby{text-align:center;max-width:520px}.profile-pill{display:flex;justify-content:space-between;align-items:center;background:#111119;border:1px solid #30303d;padding:15px 18px;border-radius:14px;margin:24px 0}.profile-pill b{font-size:13px;color:#9b8cff}.features{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:20px}.features span{padding:11px;border:1px solid #30303d;border-radius:12px;color:#aaa}.call-page{min-height:100vh;background:#050507;display:flex;flex-direction:column}.call-page header{padding:16px 20px;display:flex;justify-content:space-between;background:#101017;border-bottom:1px solid #292933}.call-page header span{color:#aaa}.videos{position:relative;flex:1;min-height:70vh;display:flex;align-items:center;justify-content:center;background:#09090d}.remote{width:100%;height:100%;object-fit:cover;max-height:78vh}.local{position:absolute;right:20px;bottom:20px;width:180px;aspect-ratio:16/10;object-fit:cover;border:2px solid #fff;border-radius:14px;background:#15151c}.call-status{text-align:center;color:#bbb;padding:10px}.controls{display:flex;justify-content:center;gap:12px;padding:16px;background:#101017}.controls button{width:auto;min-width:56px;margin:0}.controls .end{background:#c53b50;padding:0 24px}@media(max-width:600px){.local{width:120px;right:10px;bottom:10px}.controls button{min-width:48px}.call-page header{font-size:14px}}
+
+
+.daily-container {
+  width: min(1100px, calc(100% - 32px));
+  height: min(72vh, 760px);
+  min-height: 420px;
+  margin: 18px auto;
+  overflow: hidden;
+  border-radius: 18px;
+  background: #111827;
+}
+.daily-container iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+@media (max-width: 640px) {
+  .daily-container {
+    width: calc(100% - 16px);
+    height: 68vh;
+    min-height: 360px;
+  }
+}
