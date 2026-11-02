@@ -235,22 +235,6 @@ function App() {
     }
   }
 
-  function toggleMic() {
-    const track = streamRef.current?.getAudioTracks()[0]
-    if (!track) return
-
-    track.enabled = !track.enabled
-    setMicOn(track.enabled)
-  }
-
-  function toggleCamera() {
-    const track = streamRef.current?.getVideoTracks()[0]
-    if (!track) return
-
-    track.enabled = !track.enabled
-    setCameraOn(track.enabled)
-  }
-
   if (screen === 'loading') {
     return (
       <main className="shell">
