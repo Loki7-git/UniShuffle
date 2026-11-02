@@ -1,4 +1,8 @@
-.env.local
 node_modules
-dist
+.next
+out
+.vercel
+.env
+.env.local
+.env.*.local
 .DS_Store
