@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { supabase } from './supabase'
+import DailyIframe from '@daily-co/daily-js'
 import './style.css'
 
 function App() {
@@ -16,12 +17,9 @@ function App() {
   const [micOn, setMicOn] = useState(true)
   const [cameraOn, setCameraOn] = useState(true)
   const localVideo = useRef(null)
-  const remoteVideo = useRef(null)
-  const streamRef = useRef(null)
-  const peerRef = useRef(null)
-  const channelRef = useRef(null)
+  const dailyContainerRef = useRef(null)
+  const dailyCallRef = useRef(null)
   const pollTimerRef = useRef(null)
-  const pendingCandidatesRef = useRef([])
 
   useEffect(() => {
     if (!supabase) {
@@ -146,152 +144,52 @@ function App() {
 
   async function openCall(id) {
     setScreen('call')
-    setStatus('Starting camera and microphone…')
-    pendingCandidatesRef.current = []
-
-    const { data: match, error } = await supabase
-      .from('matches')
-      .select('id,user_a,user_b')
-      .eq('id', id)
-      .single()
-
-    if (error) {
-      setStatus(error.message)
-      return
-    }
-
-    const otherId = match.user_a === session.user.id ? match.user_b : match.user_a
-
-    const { data: p } = await supabase
-      .from('profiles')
-      .select('nickname,gender')
-      .eq('id', otherId)
-      .single()
-
-    setPartner(p || { nickname: 'Student', gender: '' })
+    setStatus('Preparing your private video room…')
 
     try {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error('Your browser does not support camera and microphone access.')
-      }
+      const { data: match, error: matchError } = await supabase
+        .from('matches')
+        .select('id,user_a,user_b')
+        .eq('id', id)
+        .single()
+      if (matchError) throw matchError
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true
+      const otherId = match.user_a === session.user.id ? match.user_b : match.user_a
+      const { data: p } = await supabase
+        .from('profiles')
+        .select('nickname,gender')
+        .eq('id', otherId)
+        .single()
+      setPartner(p || { nickname: 'Student', gender: '' })
+
+      const { data: { session: currentSession } } = await supabase.auth.getSession()
+      if (!currentSession?.access_token) throw new Error('Your temporary login expired. Please refresh.')
+
+      const response = await fetch('/api/daily-room', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${currentSession.access_token}`
+        },
+        body: JSON.stringify({ matchId: id })
       })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'Could not create the video room.')
+      if (!dailyContainerRef.current) throw new Error('Video call area is not ready. Please try again.')
 
-      streamRef.current = stream
-
-      if (localVideo.current) {
-        localVideo.current.srcObject = stream
-        await localVideo.current.play().catch(() => {})
-      }
-
-      const pc = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      const callFrame = DailyIframe.createFrame(dailyContainerRef.current, {
+        showLeaveButton: false,
+        showFullscreenButton: true,
+        iframeStyle: { width: '100%', height: '100%', border: '0', borderRadius: '18px' }
       })
-
-      peerRef.current = pc
-
-      stream.getTracks().forEach(track => pc.addTrack(track, stream))
-
-      pc.ontrack = event => {
-        const remoteStream = event.streams?.[0]
-        if (remoteStream && remoteVideo.current) {
-          remoteVideo.current.srcObject = remoteStream
-          remoteVideo.current.play().catch(() => {})
-        }
-      }
-
-      const channel = supabase.channel('call:' + id, {
-        config: { broadcast: { self: false } }
-      })
-
-      channelRef.current = channel
-
-      pc.onicecandidate = async event => {
-        if (!event.candidate) return
-
-        await channel.send({
-          type: 'broadcast',
-          event: 'signal',
-          payload: {
-            type: 'candidate',
-            candidate: event.candidate
-          }
-        })
-      }
-
-      channel.on('broadcast', { event: 'signal' }, async ({ payload }) => {
-        try {
-          if (payload.type === 'ready') {
-            if (isOfferer(match)) {
-              const offer = await pc.createOffer()
-              await pc.setLocalDescription(offer)
-
-              await channel.send({
-                type: 'broadcast',
-                event: 'signal',
-                payload: {
-                  type: 'offer',
-                  sdp: pc.localDescription
-                }
-              })
-            }
-            return
-          }
-
-          if (payload.type === 'offer' && !isOfferer(match)) {
-            await pc.setRemoteDescription(payload.sdp)
-
-            const answer = await pc.createAnswer()
-            await pc.setLocalDescription(answer)
-
-            await channel.send({
-              type: 'broadcast',
-              event: 'signal',
-              payload: {
-                type: 'answer',
-                sdp: pc.localDescription
-              }
-            })
-
-            await flushCandidates(pc)
-            return
-          }
-
-          if (payload.type === 'answer' && isOfferer(match)) {
-            await pc.setRemoteDescription(payload.sdp)
-            await flushCandidates(pc)
-            return
-          }
-
-          if (payload.type === 'candidate' && payload.candidate) {
-            if (pc.remoteDescription) {
-              await pc.addIceCandidate(payload.candidate)
-            } else {
-              pendingCandidatesRef.current.push(payload.candidate)
-            }
-          }
-        } catch (err) {
-          console.error('WebRTC signal error:', err)
-        }
-      })
-
-      channel.subscribe(async state => {
-        if (state !== 'SUBSCRIBED') return
-
-        setStatus('Connected — say hello 👋')
-
-        await channel.send({
-          type: 'broadcast',
-          event: 'signal',
-          payload: { type: 'ready' }
-        })
-      })
+      dailyCallRef.current = callFrame
+      callFrame.on('joined-meeting', () => setStatus('Connected — say hello 👋'))
+      callFrame.on('left-meeting', () => setStatus('Call ended.'))
+      callFrame.on('error', event => setStatus(event?.errorMsg || 'Video call connection failed.'))
+      await callFrame.join({ url: result.url, token: result.token })
     } catch (error) {
-      console.error(error)
-      setStatus(error?.message || 'Camera/microphone permission is required for the call.')
+      console.error('Daily call error:', error)
+      setStatus(error?.message || 'Unable to start the video call.')
     }
   }
 
@@ -313,12 +211,15 @@ function App() {
 
   async function endCall() {
     clearTimeout(pollTimerRef.current)
-
-    if (matchId) {
-      await supabase.rpc('end_match', { p_match: matchId })
+    try {
+      await dailyCallRef.current?.leave()
+      await dailyCallRef.current?.destroy()
+    } catch (error) {
+      console.warn('Daily cleanup:', error)
     }
+    dailyCallRef.current = null
 
-    cleanupCall()
+    if (matchId) await supabase.rpc('end_match', { p_match: matchId })
     setMatchId(null)
     setPartner(null)
     setScreen('lobby')
@@ -327,17 +228,11 @@ function App() {
 
   function cleanupCall() {
     clearTimeout(pollTimerRef.current)
-    streamRef.current?.getTracks().forEach(track => track.stop())
-    peerRef.current?.close()
-
-    if (channelRef.current && supabase) {
-      supabase.removeChannel(channelRef.current)
+    if (dailyCallRef.current) {
+      dailyCallRef.current.leave().catch(() => {})
+      dailyCallRef.current.destroy().catch(() => {})
+      dailyCallRef.current = null
     }
-
-    streamRef.current = null
-    peerRef.current = null
-    channelRef.current = null
-    pendingCandidatesRef.current = []
   }
 
   function toggleMic() {
@@ -461,16 +356,10 @@ function App() {
         <span>{partner ? 'Talking to ' + partner.nickname : 'Connecting…'}</span>
       </header>
 
-      <div className="videos">
-        <video ref={remoteVideo} autoPlay playsInline className="remote" />
-        <video ref={localVideo} autoPlay muted playsInline className="local" />
-      </div>
-
+      <div ref={dailyContainerRef} className="daily-container" />
       <div className="call-status">{status}</div>
 
       <div className="controls">
-        <button onClick={toggleMic}>{micOn ? '🎙️' : '🔇'}</button>
-        <button onClick={toggleCamera}>{cameraOn ? '📷' : '🚫'}</button>
         <button className="end" onClick={endCall}>End Call</button>
       </div>
     </main>
