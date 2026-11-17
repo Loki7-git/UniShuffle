@@ -57,7 +57,7 @@ function App() {
   }
 
   async function loadProfile(id) {
-    const { data, error } = await supabase.from('profiles').select('*').eq('id', id).maybeSingle()
+    const { data, error } = await supabase.from('profiles').select('id,nickname,gender').eq('id', id).maybeSingle()
     if (error) {
       setStatus(error.message)
       setScreen('error')
