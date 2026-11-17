@@ -89,20 +89,20 @@ function App() {
     setLoading(true)
     setStatus('')
 
-    const { data, error } = await supabase
+    const { data: saved, error } = await supabase.rpc('save_profile', { p_nickname: name, p_gender: gender })
+
+    const { data, error: profileError } = await supabase
       .from('profiles')
-      .upsert({
-        id: session.user.id,
-        nickname: name,
-        gender
-      })
-      .select()
+      .select('id,nickname,gender')
+      .eq('id', session.user.id)
       .single()
+
+    const finalError = error || profileError
 
     setLoading(false)
 
-    if (error) {
-      setStatus(error.message)
+    if (finalError) {
+      setStatus(finalError.message)
       return
     }
 
